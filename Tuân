@@ -1,0 +1,475 @@
+-- MECCHA CHAMELEON (PHẦN 1/3)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+
+local localPlayer = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+-- Trạng thái chức năng
+local state = {
+	hitboxX2 = false,
+	espEnabled = false,
+	noclip = false,
+	aimEnabled = false,
+	aimCheck = false,
+	wallCheck = false,
+	aimSilent = false,
+	aimSilentCheck = false,
+	antiVoid = false,
+	antiAfk = false,
+}
+
+local savedHitboxSizes = {}
+local savedNoclipParts = {}
+local espData = {}
+local safeRoomModel = nil
+local floatingFlightActive = false
+local flightBodyVel = nil
+local lastAfkMoveTime = os.clock()
+
+-- Parent GUI an toàn
+local function getGuiParent()
+	if gethui then
+		local ok, res = pcall(gethui)
+		if ok and res then return res end
+	end
+	local okCore, core = pcall(function() return CoreGui end)
+	if okCore and core then return core end
+	return localPlayer:WaitForChild("PlayerGui")
+end
+
+local guiParent = getGuiParent()
+if guiParent:FindFirstChild("MecchaChameleonGui") then
+	guiParent:FindFirstChild("MecchaChameleonGui"):Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "MecchaChameleonGui"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = guiParent
+
+-- Menu nhỏ kiểu mẫu ảnh: MECCHA CHAMELEON
+local miniBtn = Instance.new("TextButton")
+miniBtn.Name = "MiniOpenBtn"
+miniBtn.Size = UDim2.new(0, 145, 0, 28)
+miniBtn.Position = UDim2.new(0.03, 0, 0.15, 0)
+miniBtn.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
+miniBtn.BorderColor3 = Color3.fromRGB(70, 70, 78)
+miniBtn.BorderSizePixel = 1
+miniBtn.Text = "MECCHA CHAMELEON"
+miniBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+miniBtn.Font = Enum.Font.GothamBold
+miniBtn.TextSize = 11
+miniBtn.Visible = false
+miniBtn.Active = true
+miniBtn.Draggable = true
+miniBtn.Parent = screenGui
+
+local mainBox = Instance.new("Frame")
+mainBox.Name = "MecchaMainBox"
+mainBox.Size = UDim2.new(0, 215, 0, 330)
+mainBox.Position = UDim2.new(0.05, 0, 0.18, 0)
+mainBox.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
+mainBox.BorderColor3 = Color3.fromRGB(75, 75, 85)
+mainBox.BorderSizePixel = 1
+mainBox.Active = true
+mainBox.Draggable = true
+mainBox.Parent = screenGui
+
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.Size = UDim2.new(1, 0, 0, 26)
+titleBar.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
+titleBar.BorderColor3 = Color3.fromRGB(60, 60, 68)
+titleBar.BorderSizePixel = 1
+titleBar.Parent = mainBox
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -28, 1, 0)
+titleLabel.Position = UDim2.new(0, 6, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "MECCHA CHAMELEON"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextSize = 11
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
+titleLabel.Parent = titleBar
+
+local minBtn = Instance.new("TextButton")
+minBtn.Size = UDim2.new(0, 22, 0, 22)
+minBtn.Position = UDim2.new(1, -24, 0, 2)
+minBtn.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+minBtn.BorderColor3 = Color3.fromRGB(80, 80
+-- MECCHA CHAMELEON (PHẦN 2/3)
+local function isTeammate(plr)
+	if not plr or plr == localPlayer then return true end
+	if localPlayer.Team and plr.Team then
+		return localPlayer.Team == plr.Team
+	end
+	return false
+end
+
+local function getAliveHead(plr)
+	local char = plr and plr.Character
+	if not char then return nil, nil end
+	local head = char:FindFirstChild("Head")
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if head and head:IsA("BasePart") and hum and hum.Health > 0 then
+		return head, char
+	end
+	return nil, nil
+end
+
+local function isClearLineOfSight(targetPart)
+	if not state.wallCheck then return true end
+	local myChar = localPlayer.Character
+	local myOriginPart = myChar and (myChar:FindFirstChild("Head") or myChar:FindFirstChild("HumanoidRootPart"))
+	if not myOriginPart or not targetPart then return false end
+
+	local rayParams = RaycastParams.new()
+	rayParams.FilterDescendantsInstances = {myChar, targetPart.Parent, safeRoomModel}
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+	local dir = targetPart.Position - myOriginPart.Position
+	local hit = Workspace:Raycast(myOriginPart.Position, dir, rayParams)
+	return hit == nil
+end
+
+-- 1. Hitbox x2
+local function applyHitboxX2(enabled)
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= localPlayer and plr.Character then
+			local root = plr.Character:FindFirstChild("HumanoidRootPart")
+			local head = plr.Character:FindFirstChild("Head")
+			if root and root:IsA("BasePart") then
+				if enabled and not isTeammate(plr) then
+					if not savedHitboxSizes[root] then
+						savedHitboxSizes[root] = {
+							size = root.Size,
+							transparency = root.Transparency,
+							canCollide = root.CanCollide
+						}
+					end
+					root.Size = savedHitboxSizes[root].size * 2
+					root.Transparency = math.max(savedHitboxSizes[root].transparency, 0.75)
+					root.CanCollide = false
+				elseif savedHitboxSizes[root] then
+					root.Size = savedHitboxSizes[root].size
+					root.Transparency = savedHitboxSizes[root].transparency
+					root.CanCollide = savedHitboxSizes[root].canCollide
+					savedHitboxSizes[root] = nil
+				end
+			end
+			if head and head:IsA("BasePart") then
+				if enabled and not isTeammate(plr) then
+					if not savedHitboxSizes[head] then
+						savedHitboxSizes[head] = {
+							size = head.Size,
+							canCollide = head.CanCollide
+						}
+					end
+					head.Size = savedHitboxSizes[head].size * 1.5
+					head.CanCollide = false
+				elseif savedHitboxSizes[head] then
+					head.Size = savedHitboxSizes[head].size
+					head.CanCollide = savedHitboxSizes[head].canCollide
+					savedHitboxSizes[head] = nil
+				end
+			end
+		end
+	end
+end
+
+-- 2. ESP xuyên tường (team mình xanh dương, team địch đỏ ôm sát cơ thể)
+local function clearEspForPlayer(plr)
+	local entry = espData[plr]
+	if entry then
+		if entry.highlight then pcall(function() entry.highlight:Destroy() end) end
+		if entry.billboard then pcall(function() entry.billboard:Destroy() end) end
+		if entry.boxes then
+			for _, box in ipairs(entry.boxes) do
+				pcall(function() box:Destroy() end)
+			end
+		end
+		espData[plr] = nil
+	end
+end
+
+local function buildBodyBoxesForCharacter(char, color3)
+	local boxes = {}
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			local box = Instance.new("BoxHandleAdornment")
+			box.Name = "MecchaBodyBox"
+			box.Adornee = part
+			box.Size = part.Size + Vector3.new(0.06, 0.06, 0.06)
+			box.Color3 = color3
+			box.Transparency = 0.45
+			box.ZIndex = 10
+			box.AlwaysOnTop = true
+			box.Parent = screenGui
+			table.insert(boxes, box)
+		end
+	end
+	return boxes
+end
+
+local function updateEsp()
+	for plr in pairs(espData) do
+		if plr.Parent ~= Players or not state.espEnabled or not plr.Character then
+			clearEspForPlayer(plr)
+		end
+	end
+
+	if not state.espEnabled then return end
+
+	local myChar = localPlayer.Character
+	local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Head"))
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= localPlayer and plr.Character then
+			local char = plr.Character
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			local head = char:FindFirstChild("Head")
+
+			if hum and hum.Health > 0 and head then
+				local sameTeam = isTeammate(plr)
+				local fillCol = sameTeam and Color3.fromRGB(25, 115, 255) or Color3.fromRGB(240, 40, 50)
+				local outlineCol = sameTeam and Color3.fromRGB(110, 185, 255) or Color3.fromRGB(255, 105, 115)
+
+				local entry = espData[plr]
+				if not entry or entry.char ~= char or entry.sameTeam ~= sameTeam then
+					clearEspForPlayer(plr)
+
+					local hl = Instance.new("Highlight")
+					hl.Name = "MecchaEspHighlight"
+					hl.Adornee = char
+					hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+					hl.FillColor = fillCol
+					hl.OutlineColor = outlineCol
+					hl.FillTransparency = 0.45
+					hl.OutlineTransparency = 0
+					hl.Parent = screenGui
+
+					local bb = Instance.new("BillboardGui")
+					bb.Name = "MecchaEspTag"
+					bb.Adornee = head
+					bb.Size = UDim2.new(0, 140, 0, 22)
+					bb.StudsOffset = Vector3.new(0, 2.4, 0)
+					bb.AlwaysOnTop = true
+					bb.Parent = screenGui
+
+					local lbl = Instance.new("TextLabel")
+					lbl.Size = UDim2.new(1, 0, 1, 0)
+					lbl.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
+					lbl.BackgroundTransparency = 0.35
+					lbl.TextColor3 = outlineCol
+					lbl.Font = Enum.Font.GothamBold
+					lbl.TextSize = 10
+					lbl.Parent = bb
+					Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 4)
+
+					entry = {
+						char = char,
+						sameTeam = sameTeam,
+						highlight = hl,
+						billboard = bb,
+						label = lbl,
+						boxes = buildBodyBoxesForCharacter(char, fillCol)
+					}
+					espData[plr] = entry
+				end
+
+				local dist = myRoot and math.floor((head.Position - myRoot.Position).Magnitude) or 0
+				local roleTag = sameTeam and "[TEAM]" or "[ĐỊCH]"
+				entry.label.Text = roleTag .. " " .. plr.Name .. " | " .. tostring(dist) .. "m"
+			else
+				clearEspForPlayer(plr)
+			end
+		end
+	end
+end
+
+-- Noclip
+local function applyNoclip(enabled)
+	local char = localPlayer.Character
+	if not char then return end
+
+	if enabled then
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				if savedNoclipParts[part] == nil then
+					savedNoclipParts[part] = part.CanCollide
+				end
+				part.CanCollide = false
+			end
+		end
+	else
+		for part, oldCollide in pairs(savedNoclipParts) do
+			if part and part.Parent then
+				part.CanCollide = oldCollide
+			end
+		end
+		table.clear(savedNoclipParts)
+	end
+end
+
+-- 3. Aim địch (bỏ team), Aim Check, Wall Check & Aim Silent
+local function getBestEnemyHead(useCheck, useWallCheck)
+	local viewportCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+	local bestHead = nil
+	local bestScreenDist = math.huge
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= localPlayer and not isTeammate(plr) then
+			local head, _ = getAliveHead(plr)
+			if head then
+				local valid = true
+				if useCheck then
+					local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+					valid = (hum ~= nil and hum.Health > 0 and plr.Character:FindFirstChild("HumanoidRootPart") ~= nil)
+				end
+				if valid and (not useWallCheck or isClearLineOfSight(head)) then
+					local pos, onScreen = camera:WorldToViewportPoint(head.Position)
+					if onScreen and pos.Z > 0 then
+						local d = (Vector2.new(pos.X, pos.Y) - viewportCenter).Magnitude
+						if d < bestScreenDist then
+							bestScreenDist = d
+							bestHead = head
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return bestHead
+end
+
+local oldNamecall
+pcall(function()
+	oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+		local method = getnamecallmethod()
+		if state.aimSilent and (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist") then
+			local targetHead = getBestEnemyHead(state.aimSilentCheck, state.wallCheck)
+			if targetHead then
+				local args = {...}
+				if method == "Raycast" and typeof(args[1]) == "Vector3" then
+					args[2] = (targetHead.Position - args[1]).Unit * (typeof(args[2]) == "Vector3" and args[2].Magnitude or 500)
+					return oldNamecall(self, unpack(args))
+				end
+			end
+		end
+		return oldNamecall(self, ...)
+	end)
+end)
+-- MECCHA CHAMELEON (PHẦN 3/3)
+-- 4. Anti Void (Laser 200m -> Tường trắng -> Góc nhìn/Bay -> Nút dịch chuyển)
+local function createWhiteSafeRoom(originPos)
+	if safeRoomModel then
+		pcall(function() safeRoomModel:Destroy() end)
+		safeRoomModel = nil
+	end
+
+	local model = Instance.new("Model")
+	model.Name = "MecchaWhiteSafeZone"
+	model.Parent = Workspace
+
+	local center = originPos - Vector3.new(0, 8, 0)
+	local whiteMat = Enum.Material.SmoothPlastic
+	local whiteCol = Color3.fromRGB(255, 255, 255)
+
+	local floor = Instance.new("Part")
+	floor.Name = "WhiteFloor"
+	floor.Size = Vector3.new(36, 2, 36)
+	floor.Position = center
+	floor.Anchored = true
+	floor.Material = whiteMat
+	floor.Color = whiteCol
+	floor.Parent = model
+
+	local ceiling = Instance.new("Part")
+	ceiling.Name = "WhiteCeiling"
+	ceiling.Size = Vector3.new(36, 2, 36)
+	ceiling.Position = center + Vector3.new(0, 18, 0)
+	ceiling.Anchored = true
+	ceiling.Material = whiteMat
+	ceiling.Color = whiteCol
+	ceiling.Parent = model
+
+	local walls = {
+		{size = Vector3.new(36, 18, 2), pos = center + Vector3.new(0, 9, 17)},
+		{size = Vector3.new(36, 18, 2), pos = center + Vector3.new(0, 9, -17)},
+		{size = Vector3.new(2, 18, 36), pos = center + Vector3.new(17, 9, 0)},
+		{size = Vector3.new(2, 18, 36), pos = center + Vector3.new(-17, 9, 0)},
+	}
+
+	for i, w in ipairs(walls) do
+		local wallPart = Instance.new("Part")
+		wallPart.Name = "WhiteWall_" .. tostring(i)
+		wallPart.Size = w.size
+		wallPart.Position = w.pos
+		wallPart.Anchored = true
+		wallPart.Material = whiteMat
+		wallPart.Color = whiteCol
+		wallPart.Parent = model
+	end
+
+	safeRoomModel = model
+	return center + Vector3.new(0, 3, 0)
+end
+
+local function enableFlightControl(root)
+	if not root then return end
+	floatingFlightActive = true
+	if flightBodyVel then
+		pcall(function() flightBodyVel:Destroy() end)
+	end
+	local bv = Instance.new("BodyVelocity")
+	bv.Name = "MecchaFlightVel"
+	bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	bv.Velocity = Vector3.zero
+	bv.Parent = root
+	flightBodyVel = bv
+end
+
+local function disableFlightControl()
+	floatingFlightActive = false
+	if flightBodyVel then
+		pcall(function() flightBodyVel:Destroy() end)
+		flightBodyVel = nil
+	end
+end
+
+tpSafeBtn.MouseButton1Click:Connect(function()
+	local char = localPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root then
+		local targetPos = safeRoomModel and safeRoomModel:FindFirstChild("WhiteFloor")
+			and (safeRoomModel.WhiteFloor.Position + Vector3.new(0, 4, 0))
+			or (root.Position + Vector3.new(0, 5, 0))
+
+		root.CFrame = CFrame.new(targetPos)
+		camera.CameraType = Enum.CameraType.Custom
+		camera.FieldOfView = 75
+		camera.CFrame = CFrame.lookAt(targetPos + Vector3.new(0, 3, 10), targetPos)
+		disableFlightControl()
+		tpSafeBtn.Visible = false
+	end
+end)
+
+local function checkAntiVoid()
+	if not state.antiVoid then
+		tpSafeBtn.Visible = false
+		disableFlightControl()
+		return
+	end
+
+	local char = localPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+end)
